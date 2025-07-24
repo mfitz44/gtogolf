@@ -25,6 +25,7 @@ enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", value=True)
 enforce_cap = st.sidebar.checkbox("Enforce Max 26.5% Exposure", value=True)
 enforce_salary = st.sidebar.checkbox("Enforce Salary Range ($49,700–$50,000)", value=True)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
+generate = st.sidebar.button("Generate Lineups")
 
 # Setup
 names = df["Name"].tolist()
@@ -88,12 +89,13 @@ def build_lineups():
     return lineups, exposure
 
 # Run builder
-final_lineups, exposure_counter = build_lineups()
+if generate:
+    final_lineups, exposure_counter = build_lineups()
 
 # Format lineups
-lineup_table = []
-dk_export = []
-for idx, lineup in enumerate(final_lineups):
+    lineup_table = []
+    dk_export = []
+    for idx, lineup in enumerate(final_lineups):
     total_salary = sum(player_map[n]["Salary"] for n in lineup)
     total_proj = sum(player_map[n]["ProjectedPoints"] for n in lineup)
     lineup_table.append({
@@ -104,31 +106,31 @@ for idx, lineup in enumerate(final_lineups):
     })
     dk_export.append({f"PG{i+1}": p for i, p in enumerate(sorted(lineup))})
 
-lineup_df = pd.DataFrame(lineup_table)
-dk_df = pd.DataFrame(dk_export)
+    lineup_df = pd.DataFrame(lineup_table)
+    dk_df = pd.DataFrame(dk_export)
 
 # Exposure table
-exposure_df = pd.DataFrame({
+    exposure_df = pd.DataFrame({
     "Name": list(exposure_counter.keys()),
     "Lineup Count": list(exposure_counter.values()),
     "Exposure %": [v / total_lineups * 100 for v in exposure_counter.values()]
-}).sort_values(by="Exposure %", ascending=False)
+    }).sort_values(by="Exposure %", ascending=False)
 
 # Summary stats
-num_golfers_in_pool = len(df)
-num_golfers_used = len(set(name for lineup in final_lineups for name in lineup))
-avg_salary = lineup_df["Salary"].mean()
-min_proj = lineup_df["Projected Points"].min()
-max_proj = lineup_df["Projected Points"].max()
+    num_golfers_in_pool = len(df)
+    num_golfers_used = len(set(name for lineup in final_lineups for name in lineup))
+    avg_salary = lineup_df["Salary"].mean()
+    min_proj = lineup_df["Projected Points"].min()
+    max_proj = lineup_df["Projected Points"].max()
 
 # Build tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"])
 
-with tab1:
+    with tab1:
     st.subheader("Player Pool (Filtered > 0.5% GTO Ownership)")
     st.dataframe(df, use_container_width=True)
 
-with tab2:
+    with tab2:
     st.subheader("Current Build Settings")
     st.markdown(f"""
     - Singleton Rule: {'✅ Enabled' if enforce_singleton else '❌ Off'}  
@@ -138,7 +140,7 @@ with tab2:
     - Total Lineups: `{total_lineups}`
     """)
 
-with tab3:
+    with tab3:
     st.subheader("Generated Lineups")
     st.dataframe(lineup_df.style.format({
         "Salary": "${:,.0f}",
@@ -146,7 +148,7 @@ with tab3:
     }), use_container_width=True)
     st.download_button("📥 Download DraftKings CSV", dk_df.to_csv(index=False), file_name="gto_dk_upload.csv")
 
-with tab4:
+    with tab4:
     st.subheader("Ownership Exposure Summary")
     st.markdown(f"""
     - **Golfers in Pool:** {num_golfers_in_pool}  
