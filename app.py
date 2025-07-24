@@ -26,7 +26,7 @@ enforce_cap = st.sidebar.checkbox("Enforce Max 26.5% Exposure", value=True)
 enforce_salary = st.sidebar.checkbox("Enforce Salary Range ($49,700–$50,000)", value=True)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
 
-# Setup lookup info
+# Setup
 names = df["Name"].tolist()
 weights = df["GTO_Ownership%"].values / df["GTO_Ownership%"].sum()
 player_map = {row["Name"]: row for _, row in df.iterrows()}
@@ -39,6 +39,7 @@ def build_lineups():
     exposure = Counter()
     seen = set()
     lineups = []
+    unused_players = set(names)
 
     def is_valid(lineup):
         key = tuple(sorted(lineup))
@@ -59,37 +60,30 @@ def build_lineups():
         lineups.append(lineup)
         for n in lineup:
             exposure[n] += 1
+            unused_players.discard(n)
 
-    if enforce_singleton:
-        for name in names:
-            tries = 0
-            while tries < 1000:
-                others = [n for n in names if n != name]
-                wts = [player_map[n]["GTO_Ownership%"] for n in others]
-                total = sum(wts)
-                wts = [w / total for w in wts] if enforce_weighting else None
-                chosen = list(np.random.choice(others, 5, replace=False, p=wts))
-                full = chosen + [name]
-                if len(set(full)) != 6:
-                    tries += 1
-                    continue
-                if is_valid(full):
-                    add(full)
-                    break
-                tries += 1
+    # Strict Singleton Enforcement
+    while unused_players:
+        name = unused_players.pop()
+        success = False
+        while not success:
+            others = [n for n in names if n != name]
+            wts = [player_map[n]["GTO_Ownership%"] for n in others]
+            total = sum(wts)
+            wts = [w / total for w in wts] if enforce_weighting else None
+            chosen = list(np.random.choice(others, 5, replace=False, p=wts))
+            full = chosen + [name]
+            if len(set(full)) == 6 and is_valid(full):
+                add(full)
+                success = True
 
+    # Fill to full lineup count
     while len(lineups) < total_lineups:
-        tries = 0
-        while tries < 1000:
-            chosen = list(np.random.choice(
-                names, 6, replace=False, p=weights if enforce_weighting else None
-            ))
-            if is_valid(chosen):
-                add(chosen)
-                break
-            tries += 1
-        if tries >= 1000:
-            break
+        chosen = list(np.random.choice(
+            names, 6, replace=False, p=weights if enforce_weighting else None
+        ))
+        if is_valid(chosen):
+            add(chosen)
 
     return lineups, exposure
 
@@ -98,6 +92,7 @@ final_lineups, exposure_counter = build_lineups()
 
 # Format lineups
 lineup_table = []
+dk_export = []
 for idx, lineup in enumerate(final_lineups):
     total_salary = sum(player_map[n]["Salary"] for n in lineup)
     total_proj = sum(player_map[n]["ProjectedPoints"] for n in lineup)
@@ -107,7 +102,10 @@ for idx, lineup in enumerate(final_lineups):
         "Salary": total_salary,
         "Projected Points": total_proj
     })
+    dk_export.append({f"PG{i+1}": p for i, p in enumerate(sorted(lineup))})
+
 lineup_df = pd.DataFrame(lineup_table)
+dk_df = pd.DataFrame(dk_export)
 
 # Exposure table
 exposure_df = pd.DataFrame({
@@ -123,7 +121,7 @@ avg_salary = lineup_df["Salary"].mean()
 min_proj = lineup_df["Projected Points"].min()
 max_proj = lineup_df["Projected Points"].max()
 
-# Build tabbed interface
+# Build tabs
 tab1, tab2, tab3, tab4 = st.tabs(["📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"])
 
 with tab1:
@@ -146,7 +144,7 @@ with tab3:
         "Salary": "${:,.0f}",
         "Projected Points": "{:.1f}"
     }), use_container_width=True)
-    st.download_button("📥 Download Lineups CSV", lineup_df.to_csv(index=False), file_name="gto_lineups.csv")
+    st.download_button("📥 Download DraftKings CSV", dk_df.to_csv(index=False), file_name="gto_dk_upload.csv")
 
 with tab4:
     st.subheader("Ownership Exposure Summary")
