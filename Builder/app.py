@@ -112,14 +112,7 @@ exposure_df = pd.DataFrame({
     "Name": list(exposure_counter.keys()),
     "Lineup Count": list(exposure_counter.values()),
     "Exposure %": [v / total_lineups * 100 for v in exposure_counter.values()]
-}).merge(df[["Name", "GTO_Ownership%", "Ownership_Proj_%"]], on="Name", how="left")
-
-# Add difference columns
-exposure_df["vs Projected %"] = exposure_df["Exposure %"] - exposure_df["Ownership_Proj_%"]
-exposure_df["vs GTO Target %"] = exposure_df["Exposure %"] - exposure_df["GTO_Ownership%"]
-
-# Sort by Exposure %
-exposure_df = exposure_df.sort_values(by="Exposure %", ascending=False)
+}).sort_values(by="Exposure %", ascending=False)
 
 # Summary stats
 num_golfers_in_pool = len(df)
