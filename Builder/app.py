@@ -26,11 +26,21 @@ enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", value
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
 
 # Clean & filter player pool
-df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Ceiling"])
-# Filter out low ceiling players based on slider
+df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
 df = df[df["Ceiling"] >= min_ceiling]
-# Filter by min GTO ownership (hard cutoff of 0.5%)
 df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
+
+# Calculate leverage metric (GTO ownership % / projected ownership %)
+df["Leverage"] = (df["GTO_Ownership%"] / df["Projected_Ownership%"]).round(1)
+
+# Reorder columns to place Leverage after Salary
+cols = df.columns.tolist()
+# Move Leverage to index after Salary
+if "Leverage" in cols and "Salary" in cols:
+    cols.remove("Leverage")
+    salary_idx = cols.index("Salary") + 1
+    cols.insert(salary_idx, "Leverage")
+df = df[cols]
 
 # Setup
 names = df["Name"].tolist()
