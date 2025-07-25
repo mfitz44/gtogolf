@@ -23,8 +23,14 @@ st.sidebar.header("Builder Settings")
 enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", value=True)
 enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", value=True)
 enforce_cap = st.sidebar.checkbox("Enforce Max 26.5% Exposure", value=True)
-enforce_salary = st.sidebar.checkbox("Enforce Salary Range ($49,700–$50,000)", value=True)
+enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", value=True)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
+
+# Add manual rerun button
+if "simulate" not in st.session_state:
+    st.session_state.simulate = 0
+if st.sidebar.button("Run Simulation"):
+    st.session_state.simulate += 1
 
 # Setup
 names = df["Name"].tolist()
@@ -34,9 +40,8 @@ salary_range = (49700, 50000)
 max_exposure = 0.265
 max_per_player = int(total_lineups * max_exposure)
 
-# Lineup builder
 @st.cache_data(show_spinner=False)
-def build_lineups():
+def build_lineups(simulate):
     exposure = Counter()
     seen = set()
     lineups = []
@@ -71,8 +76,8 @@ def build_lineups():
             others = [n for n in names if n != name]
             wts = [player_map[n]["GTO_Ownership%"] for n in others]
             total = sum(wts)
-            wts = [w / total for w in wts] if enforce_weighting else None
-            chosen = list(np.random.choice(others, 5, replace=False, p=wts))
+            p = [w / total for w in wts] if enforce_weighting else None
+            chosen = list(np.random.choice(others, 5, replace=False, p=p))
             full = chosen + [name]
             if len(set(full)) == 6 and is_valid(full):
                 add(full)
@@ -88,9 +93,9 @@ def build_lineups():
 
     return lineups, exposure
 
-# Run builder
+# Run builder with a spinner
 with st.spinner("⛳ Generating lineups…"):
-    final_lineups, exposure_counter = build_lineups()
+    final_lineups, exposure_counter = build_lineups(st.session_state.simulate)
 
 # Format lineups
 lineup_table = []
@@ -124,7 +129,9 @@ min_proj = lineup_df["Projected Points"].min()
 max_proj = lineup_df["Projected Points"].max()
 
 # Build tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"
+])
 
 with tab1:
     st.subheader("Player Pool (Filtered > 0.5% GTO Ownership)")
@@ -133,12 +140,12 @@ with tab1:
 with tab2:
     st.subheader("Current Build Settings")
     st.markdown(f"""
-    - Singleton Rule: {'✅ Enabled' if enforce_singleton else '❌ Off'}  
-    - GTO Weighting: {'✅ Enabled' if enforce_weighting else '❌ Off'}  
-    - Exposure Cap (26.5%): {'✅ Enabled' if enforce_cap else '❌ Off'}  
-    - Salary Range ($49,700–$50,000): {'✅ Enabled' if enforce_salary else '❌ Off'}  
-    - Total Lineups: `{total_lineups}`
-    """)
+- Singleton Rule: {'✅ Enabled' if enforce_singleton else '❌ Off'}  
+- GTO Weighting: {'✅ Enabled' if enforce_weighting else '❌ Off'}  
+- Exposure Cap: {'✅ Enabled' if enforce_cap else '❌ Off'}  
+- Salary Range: {'✅ Enforced' if enforce_salary else '❌ Off'}  
+- Total Lineups: `{total_lineups}`
+""")
 
 with tab3:
     st.subheader("Generated Lineups")
@@ -151,11 +158,11 @@ with tab3:
 with tab4:
     st.subheader("Ownership Exposure Summary")
     st.markdown(f"""
-    - **Golfers in Pool:** {num_golfers_in_pool}  
-    - **Golfers Used in Lineups:** {num_golfers_used}  
-    - **Average Lineup Salary:** ${avg_salary:,.0f}  
-    - **Projected Points Range:** {min_proj:.1f} – {max_proj:.1f}
-    """)
+- **Golfers in Pool:** {num_golfers_in_pool}  
+- **Golfers Used in Lineups:** {num_golfers_used}  
+- **Average Lineup Salary:** ${avg_salary:,.0f}  
+- **Projected Points Range:** {min_proj:.1f} – {max_proj:.1f}
+""")
     st.dataframe(exposure_df.style.format({
         "Exposure %": "{:.1f}%"
     }), use_container_width=True)
