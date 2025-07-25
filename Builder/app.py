@@ -11,26 +11,26 @@ uploaded_file = st.sidebar.file_uploader("Upload GTO Scorecard CSV", type=["csv"
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 else:
-    df = pd.read_csv("mock_gto_scorecard.csv")
+    df = pd.read_csv("mock_gto_scorecard_updated.csv")
     st.sidebar.info("Using default mock scorecard.")
-
-# Clean & filter player pool
-df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%"])
-df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
 
 # Sidebar builder toggles
 st.sidebar.header("Builder Settings")
+# Minimum ceiling filter slider
+min_ceiling = st.sidebar.slider("Min Ceiling (yards)", min_value=0, max_value=200, value=65, step=1)
+# Other toggles
 enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", value=True)
 enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", value=True)
-enforce_cap = st.sidebar.checkbox("Enforce Max 26.5% Exposure", value=True)
+enforce_cap = st.sidebar.checkbox("Enforce Exposure Cap", value=True)
 enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", value=True)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
 
-# Add manual rerun button
-if "simulate" not in st.session_state:
-    st.session_state.simulate = 0
-if st.sidebar.button("Run Simulation"):
-    st.session_state.simulate += 1
+# Clean & filter player pool
+df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Ceiling"])
+# Filter out low ceiling players based on slider
+df = df[df["Ceiling"] >= min_ceiling]
+# Filter by min GTO ownership (hard cutoff of 0.5%)
+df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
 
 # Setup
 names = df["Name"].tolist()
@@ -93,6 +93,12 @@ def build_lineups(simulate):
 
     return lineups, exposure
 
+# Add manual rerun button
+if "simulate" not in st.session_state:
+    st.session_state.simulate = 0
+if st.sidebar.button("Run Simulation"):
+    st.session_state.simulate += 1
+
 # Run builder with a spinner
 with st.spinner("⛳ Generating lineups…"):
     final_lineups, exposure_counter = build_lineups(st.session_state.simulate)
@@ -134,7 +140,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    st.subheader("Player Pool (Filtered > 0.5% GTO Ownership)")
+    st.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
     st.dataframe(df, use_container_width=True)
 
 with tab2:
