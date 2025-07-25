@@ -35,6 +35,7 @@ max_exposure = 0.265
 max_per_player = int(total_lineups * max_exposure)
 
 # Lineup builder
+@st.cache_data(show_spinner=False)
 def build_lineups():
     exposure = Counter()
     seen = set()
@@ -88,7 +89,8 @@ def build_lineups():
     return lineups, exposure
 
 # Run builder
-final_lineups, exposure_counter = build_lineups()
+with st.spinner("⛳ Generating lineups…"):
+    final_lineups, exposure_counter = build_lineups()
 
 # Format lineups
 lineup_table = []
