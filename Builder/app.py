@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,9 +20,9 @@ else:
 # Determine dynamic ceiling range
 max_ceiling_val = int(raw_df['Ceiling'].max())
 min_ceiling = st.sidebar.slider(
-    "Min Ceiling", 
-    min_value=int(raw_df['Ceiling'].min()), 
-    max_value=max_ceiling_val, 
+    "Min Ceiling",
+    min_value=int(raw_df['Ceiling'].min()),
+    max_value=max_ceiling_val,
     value=65,
     step=1,
     help=f"Select minimum ceiling between {int(raw_df['Ceiling'].min())} and {max_ceiling_val}"
@@ -45,13 +46,13 @@ def calculate_high_bias_pairs():
     dfs = [pd.read_csv(f) for f in files]
     combined = pd.concat(dfs, ignore_index=True)
     player_cols = [c for c in combined.columns if c.lower() not in ['lineupname','entry']]
-    total_lineups = combined.shape[0]
+    total = combined.shape[0]
     counts = combined[player_cols].apply(pd.Series.value_counts).fillna(0).sum(axis=1)
     high_bias = set()
     for p1, p2 in itertools.combinations(counts.index, 2):
-        exp = (counts[p1]/total_lineups)*(counts[p2]/total_lineups)*total_lineups
-        p = (counts[p1]/total_lineups)*(counts[p2]/total_lineups)
-        std = np.sqrt(total_lineups * p * (1 - p))
+        exp = (counts[p1]/total) * (counts[p2]/total) * total
+        p = (counts[p1]/total) * (counts[p2]/total)
+        std = np.sqrt(total * p * (1 - p))
         actual = combined[player_cols].apply(lambda r: p1 in r.values and p2 in r.values, axis=1).sum()
         if std > 0 and (actual - exp)/std > 3:
             high_bias.add(frozenset((p1, p2)))
@@ -59,7 +60,7 @@ def calculate_high_bias_pairs():
 
 high_bias_pairs = calculate_high_bias_pairs()
 
-# Clean & filter player pool
+# Filter player pool
 df = raw_df.dropna(subset=["Name","Salary","GTO_Ownership%","Projected_Ownership%","Ceiling"])
 df = df[df["Ceiling"] >= min_ceiling]
 df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
@@ -91,10 +92,16 @@ def build_lineups():
     def valid(lu):
         nonlocal bias_count
         key = tuple(sorted(lu))
-        if key in seen: return False
-        if enforce_salary and not (salary_range[0] <= sum(player_map[n]["Salary"] for n in lu) <= salary_range[1]): return False
-        if enforce_cap and any(exposure[n] >= max_per_player for n in lu): return False
-        if bias_count + count_bias(lu) > max_bias_points: return False
+        if key in seen:
+            return False
+        if enforce_salary:
+            total_sal = sum(player_map[n]["Salary"] for n in lu)
+            if not (salary_range[0] <= total_sal <= salary_range[1]):
+                return False
+        if enforce_cap and any(exposure[n] >= max_per_player for n in lu):
+            return False
+        if bias_count + count_bias(lu) > max_bias_points:
+            return False
         return True
 
     def add(lu):
@@ -114,19 +121,76 @@ def build_lineups():
         while not success:
             choices = [n for n in names if n != name]
             probs = [player_map[n]["GTO_Ownership%"] for n in choices]
-            total = sum(probs)
-            p = [v/total for v in probs] if enforce_weighting else None
+            if enforce_weighting:
+                total_w = sum(probs)
+                p = [w/total_w for w in probs]
+            else:
+                p = None
             cand = list(np.random.choice(choices, 5, replace=False, p=p)) + [name]
-            if valid(cand): add(cand); success = True
+            if valid(cand):
+                add(cand)
+                success = True
 
     # Fill to total lineups
     while len(lineups) < total_lineups:
-        cand = list(np.random.choice(names, 6, replace=False, p=weights if enforce_weighting else None))
-        if valid(cand): add(cand)
+        if enforce_weighting:
+            cand = list(np.random.choice(names, 6, replace=False, p=weights))
+        else:
+            cand = list(np.random.choice(names, 6, replace=False))
+        if valid(cand):
+            add(cand)
 
     return lineups, exposure
 
+# Create tabs
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"
+])
+
+# Tab 1: Player Pool
+tab1.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
+tab1.dataframe(df, use_container_width=True)
+
+# Tab 2: Builder Settings Summary
+tab2.subheader("Current Build Settings")
+tab2.markdown(f"""
+- Min Ceiling: {min_ceiling}
+- Singleton Rule: {'✅' if enforce_singleton else '❌'}
+- GTO Weighting: {'✅' if enforce_weighting else '❌'}
+- Exposure Cap: {'✅' if enforce_cap else '❌'}
+- Salary Range: {'✅' if enforce_salary else '❌'}
+- Max Bias Points: {max_bias_points}
+- Total Lineups: {total_lineups}
+""")
+
+# Button to run the builder
 if st.sidebar.button("Run Builder"):
     final_lineups, exposure_counter = build_lineups()
-    st.write(f"Generated {len(final_lineups)} lineups.")
-    # Additional display logic here...
+
+    # Tab 3: Lineups
+    tab3.subheader("Generated Lineups")
+    lineup_table = []
+    for idx, lu in enumerate(final_lineups):
+        salary = sum(player_map[n]["Salary"] for n in lu)
+        proj = sum(player_map[n]["ProjectedPoints"] for n in lu)
+        lineup_table.append({
+            "#": idx+1,
+            "Players": ", ".join(sorted(lu)),
+            "Salary": salary,
+            "Projected Points": proj
+        })
+    lineup_df = pd.DataFrame(lineup_table)
+    tab3.dataframe(lineup_df, use_container_width=True)
+
+    # Tab 4: Ownership Report
+    tab4.subheader("Ownership Exposure Summary")
+    exposure_df = pd.DataFrame({
+        "Name": list(exposure_counter.keys()),
+        "Lineup Count": list(exposure_counter.values()),
+        "Exposure %": [v/total_lineups*100 for v in exposure_counter.values()]
+    }).sort_values("Exposure %", ascending=False)
+    tab4.dataframe(exposure_df, use_container_width=True)
+else:
+    # Show placeholders
+    tab3.subheader("Generated Lineups (press 'Run Builder' to populate)")
+    tab4.subheader("Ownership Exposure Summary (press 'Run Builder' to populate)")
