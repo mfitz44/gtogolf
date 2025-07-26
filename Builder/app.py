@@ -162,6 +162,19 @@ with tab3:
 with tab4:
     st.subheader("Ownership Exposure Summary")
     if st.session_state.exposure:
+        # ── SUMMARY STATS ───────────────────────────────────────────
+        pool_size = len(pool_df)  # total players in the filtered pool
+        players_used = len(st.session_state.exposure)  # unique players used
+        salary_map = raw_df.set_index("Name")["Salary"].to_dict()
+        all_salaries = [
+            sum(salary_map[player] for player in lineup)
+            for lineup in st.session_state.lineups
+        ]
+        avg_salary = sum(all_salaries) / len(all_salaries)
+        st.markdown(f"**Players used:** {players_used} / {pool_size}")
+        st.markdown(f"**Average lineup salary:** ${avg_salary:,.0f}")
+        st.markdown("---")
+
         exp_df = pd.DataFrame({
             "Name": list(st.session_state.exposure.keys()),
             "Lineup Count": list(st.session_state.exposure.values()),
