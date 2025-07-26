@@ -141,11 +141,13 @@ if st.sidebar.button("Run Simulation"):
 with tab3:
     st.subheader("Lineups")
     if st.session_state.lineups:
+        # display lineups
         lineup_df = pd.DataFrame([
             {"Lineup #": i+1, **{f"PG{j+1}": p for j, p in enumerate(sorted(lu))}}
             for i, lu in enumerate(st.session_state.lineups)
         ])
         st.dataframe(lineup_df, use_container_width=True)
+        # download DraftKings CSV
         dk_df = pd.DataFrame([
             {f"PG{j+1}": p for j, p in enumerate(sorted(lu))}
             for lu in st.session_state.lineups
@@ -160,50 +162,12 @@ with tab3:
 with tab4:
     st.subheader("Ownership Exposure Summary")
     if st.session_state.exposure:
-        # Summary statistics
-        total_pool = len(pool_df)
-        used_players = len(st.session_state.exposure)
-        salary_map = raw_df.set_index("Name")['Salary'].to_dict()
-        lineup_salaries = [sum(salary_map[n] for n in lu) for lu in st.session_state.lineups]
-        avg_salary = sum(lineup_salaries) / len(lineup_salaries)
-
-        st.markdown(f"**Players used:** {used_players} of {total_pool} in pool")
-        st.markdown(f"**Average lineup salary:** ${avg_salary:,.0f}")
-
-        # Build summary DataFrame
         exp_df = pd.DataFrame({
             "Name": list(st.session_state.exposure.keys()),
             "Lineup Count": list(st.session_state.exposure.values()),
-        })
-        exp_df["Exposure %"] = exp_df["Lineup Count"] / total_lineups * 100
-
-        # Merge targets and projections
-        targets = raw_df.set_index("Name")[["GTO_Ownership%", "Projected_Ownership%"]]
-        exp_df = exp_df.join(targets, on="Name")
-
-        # Calculate target count and diffs
-        exp_df["Target Count"] = (exp_df["GTO_Ownership%"] / 100 * total_lineups).round(1)
-        exp_df["Diff (Count)"] = exp_df["Lineup Count"] - exp_df["Target Count"]
-        exp_df["Diff (%)"] = exp_df["Exposure %"] - exp_df["GTO_Ownership%"]
-
-        # Reorder and format
-        cols = [
-            "Name", "Target Count", "Lineup Count", "Exposure %",
-            "GTO_Ownership%", "Projected_Ownership%", "Diff (Count)", "Diff (%)"
-        ]
-        exp_df = exp_df[cols].sort_values("Exposure %", ascending=False).reset_index(drop=True)
-
-        exp_df["Exposure %"] = exp_df["Exposure %"].map("{:.1f}%".format)
-        exp_df["GTO_Ownership%"] = exp_df["GTO_Ownership%"].map("{:.1f}%".format)
-        exp_df["Projected_Ownership%"] = exp_df["Projected_Ownership%"].map("{:.1f}%".format)
-        exp_df["Diff (%)"] = exp_df["Diff (%)"].map("{:+.1f}%".format)
-
-        st.dataframe(exp_df, use_container_width=True)
-
-        st.download_button(
-            "📥 Download Ownership Summary",
-            exp_df.to_csv(index=False),
-            file_name="ownership_summary.csv"
-        )
+            "Exposure %": [v / total_lineups * 100 for v in st.session_state.exposure.values()]
+        }).sort_values("Exposure %", ascending=False)
+        st.dataframe(exp_df.style.format({"Exposure %": "{:.1f}%"}),
+                     use_container_width=True)
     else:
         st.info("Click 'Run Simulation' to see exposure summary.")
