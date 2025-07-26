@@ -1,12 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import glob
 from collections import Counter
+import itertools
 
 st.set_page_config(page_title="GTO PGA Lineup Builder", layout="wide")
 st.title("🏌️‍♂️ GTO PGA DFS Lineup Builder")
 
 # Load raw scorecard
+global_pool = None
 uploaded_file = st.sidebar.file_uploader("Upload GTO Scorecard CSV", type=["csv"])
 if uploaded_file:
     raw_df = pd.read_csv(uploaded_file)
@@ -16,168 +19,143 @@ else:
 
 # Sidebar builder settings
 st.sidebar.header("Builder Settings")
-min_ceiling = st.sidebar.slider("Min Ceiling (yards)", 0, 200, 65)
+min_ceiling = st.sidebar.slider("Min Ceiling (yards)", int(raw_df['Ceiling'].min()), int(raw_df['Ceiling'].max()), 65)
 enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", True)
 enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", True)
 enforce_cap = st.sidebar.checkbox("Enforce Exposure Cap", True)
 max_exposure_pct = st.sidebar.slider("Max Exposure (%)", 0.0, 100.0, 26.5, step=0.1)
 enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", True)
+enforce_bias = st.sidebar.checkbox("Enforce Bias-Points Cap", True)
+max_bias_points = st.sidebar.slider("Max Bias Points per Build", 0, 50, 10)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
 
-# Tabs for layout
-tab1, tab2, tab3, tab4 = st.tabs([
-    "👥 Player Pool", "⚙️ Builder Settings", "🎲 Lineups", "📈 Ownership Report"
-])
-
-# 1) Player Pool: live-filtered by slider
-pool_df = raw_df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
-pool_df = pool_df[pool_df["Ceiling"] >= min_ceiling]
-pool_df = pool_df[pool_df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
-pool_df["Leverage"] = (pool_df["GTO_Ownership%"] / pool_df["Projected_Ownership%"]).round(1)
-cols = list(pool_df.columns)
+# 1) Player Pool
+tab1, tab2, tab3, tab4 = st.tabs(["👥 Player Pool", "⚙️ Builder Settings", "🎲 Lineups", "📈 Ownership Report"])
+pool = raw_df.dropna(subset=["Name","Salary","GTO_Ownership%","Projected_Ownership%","Ceiling"])
+pool = pool[pool["Ceiling"] >= min_ceiling]
+pool = pool[pool["GTO_Ownership%"] > 0.5].reset_index(drop=True)
+pool["Leverage"] = (pool["GTO_Ownership%"] / pool["Projected_Ownership%"]).round(1)
+cols = list(pool.columns)
 if "Leverage" in cols and "Salary" in cols:
     cols.remove("Leverage")
     idx = cols.index("Salary") + 1
     cols.insert(idx, "Leverage")
-    pool_df = pool_df[cols]
-
+    pool = pool[cols]
 with tab1:
     st.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
-    st.dataframe(pool_df, use_container_width=True)
+    st.dataframe(pool, use_container_width=True)
 
 # 2) Builder Settings display
 with tab2:
     st.subheader("Builder Settings")
-    st.markdown(f"""
-- **Min Ceiling:** {min_ceiling}
-- **Singleton Rule:** {'✅' if enforce_singleton else '❌'}
-- **GTO Weights:** {'✅' if enforce_weighting else '❌'}
-- **Exposure Cap:** {'✅' if enforce_cap else '❌'}
-- **Salary Range:** {'✅' if enforce_salary else '❌'}
-- **Lineups to Generate:** {total_lineups}
-""")
+    settings_md = f"""
+- **Min Ceiling:** {min_ceiling}  
+- **Singleton Rule:** {'✅' if enforce_singleton else '❌'}  
+- **GTO Weights:** {'✅' if enforce_weighting else '❌'}  
+- **Exposure Cap:** {'✅' if enforce_cap else '❌'} @ {max_exposure_pct}%  
+- **Salary Range:** {'✅' if enforce_salary else '❌'}  
+- **Bias-Points Cap:** {'✅' if enforce_bias else '❌'} @ {max_bias_points} pts  
+- **Lineups:** {total_lineups}
+"""
+    st.markdown(settings_md)
 
-# 3) Cachable lineup generator
-@st.cache_data(show_spinner=False)
-def build_lineups(min_ceiling, enforce_singleton, enforce_weighting, enforce_cap, max_exposure_pct, enforce_salary, total_lineups):
-    df = raw_df.copy()
-    df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
-    df = df[df["Ceiling"] >= min_ceiling]
-    df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
-    names = df["Name"].tolist()
-    player_map = df.set_index("Name").to_dict(orient="index")
+# Compute high-bias pairs via Monte Carlo sampling of pool
+@st.cache_data
+def get_high_bias_pairs_from_pool(pool_df, trials=10000):
+    names = pool_df['Name'].tolist()
+    samples = [tuple(sorted(np.random.choice(names, 6, replace=False))) for _ in range(trials)]
+    df_samples = pd.DataFrame(samples, columns=[f'PG{i+1}' for i in range(6)])
+    counts = df_samples.apply(pd.Series.value_counts).fillna(0).sum(axis=1)
+    n = trials
+    bias_pairs = set()
+    for p1, p2 in itertools.combinations(counts.index, 2):
+        exp = (counts[p1]/n) * (counts[p2]/n) * n
+        p_prob = (counts[p1]/n) * (counts[p2]/n)
+        std = np.sqrt(n * p_prob * (1 - p_prob))
+        actual = df_samples.apply(lambda r: p1 in r.values and p2 in r.values, axis=1).sum()
+        if std > 0 and (actual - exp)/std > 3:
+            bias_pairs.add(frozenset((p1, p2)))
+    return bias_pairs
+
+high_bias_pairs = get_high_bias_pairs_from_pool(pool)
+
+# Builder function
+def build_lineups():
+    pm = pool.set_index('Name').to_dict(orient='index')
     salary_range = (49700, 50000)
-    max_exposure = total_lineups * (max_exposure_pct / 100)
-    exposure = Counter()
-    seen = set()
-    lineups = []
-    unused = set(names)
+    max_exp = total_lineups * (max_exposure_pct/100)
+    exposure = Counter(); seen = set(); lineups = []; bias_count = 0
+    unused = set(pool['Name'].tolist())
 
-    def is_valid(lu):
+    def count_bias(lu):
+        return sum(1 for c in itertools.combinations(lu, 2) if frozenset(c) in high_bias_pairs)
+    def valid(lu):
+        nonlocal bias_count
         key = tuple(sorted(lu))
-        if key in seen:
-            return False
+        if key in seen: return False
         if enforce_salary:
-            s = sum(player_map[n]["Salary"] for n in lu)
-            if not (salary_range[0] <= s <= salary_range[1]):
-                return False
-        if enforce_cap:
-            if any(exposure[n] >= max_exposure for n in lu):
-                return False
+            s = sum(pm[n]['Salary'] for n in lu)
+            if not (salary_range[0] <= s <= salary_range[1]): return False
+        if enforce_cap and any(exposure[n] >= max_exp for n in lu): return False
+        if enforce_bias and (bias_count + count_bias(lu) > max_bias_points): return False
         return True
-
     def add(lu):
-        seen.add(tuple(sorted(lu)))
+        nonlocal bias_count
+        seen.add(tuple(sorted(lu))); lineups.append(lu)
         for n in lu:
-            exposure[n] += 1
-            unused.discard(n)
-        lineups.append(lu)
+            exposure[n] += 1; unused.discard(n)
+        bias_count += count_bias(lu)
 
-    # singleton rule
+    # Singleton enforcement
     if enforce_singleton:
         while unused:
             name = unused.pop()
             while True:
-                others = [n for n in names if n != name]
-                p = None
+                others = [n for n in pool['Name'] if n != name]
                 if enforce_weighting:
-                    w = [player_map[n]["GTO_Ownership%"] for n in others]
-                    total = sum(w)
-                    p = [x / total for x in w]
-                chosen = list(np.random.choice(others, 5, replace=False, p=p))
-                full = chosen + [name]
-                if is_valid(full):
-                    add(full)
-                    break
-
-    # fill remaining lineups
+                    w = [pm[n]['GTO_Ownership%'] for n in others]
+                    tot = sum(w); probs = [x/tot for x in w]
+                else:
+                    probs = None
+                cand = list(np.random.choice(others, 5, replace=False, p=probs)) + [name]
+                if valid(cand): add(cand); break
+    # Fill remaining
     while len(lineups) < total_lineups:
-        p = None
         if enforce_weighting:
-            w = [player_map[n]["GTO_Ownership%"] for n in names]
-            total = sum(w)
-            p = [x / total for x in w]
-        chosen = list(np.random.choice(names, 6, replace=False, p=p))
-        if is_valid(chosen):
-            add(chosen)
-
+            w = [pm[n]['GTO_Ownership%'] for n in pool['Name']]
+            tot = sum(w); probs = [x/tot for x in w]
+            cand = list(np.random.choice(pool['Name'], 6, replace=False, p=probs))
+        else:
+            cand = list(np.random.choice(pool['Name'], 6, replace=False))
+        if valid(cand): add(cand)
     return lineups, exposure
 
-# 4) Run Simulation button (only triggers on click)
-if "lineups" not in st.session_state:
-    st.session_state.lineups = None
-    st.session_state.exposure = None
-
+# Simulation trigger
+if 'lineups' not in st.session_state:
+    st.session_state.lineups = None; st.session_state.exposure = None
 if st.sidebar.button("Run Simulation"):
-    with st.spinner("⛳ Generating lineups…"):
-        lu, ex = build_lineups(min_ceiling, enforce_singleton, enforce_weighting, enforce_cap, max_exposure_pct, enforce_salary, total_lineups)
-        st.session_state.lineups = lu
-        st.session_state.exposure = ex
+    with st.spinner("Generating lineups…"):
+        lu, ex = build_lineups()
+        st.session_state.lineups, st.session_state.exposure = lu, ex
 
-# 5) Lineups tab
+# 3) Lineups Tab
 with tab3:
-    st.subheader("Lineups")
+    st.subheader("Generated Lineups")
     if st.session_state.lineups:
-        # display lineups
-        lineup_df = pd.DataFrame([
-            {"Lineup #": i+1, **{f"PG{j+1}": p for j, p in enumerate(sorted(lu))}}
-            for i, lu in enumerate(st.session_state.lineups)
-        ])
-        st.dataframe(lineup_df, use_container_width=True)
-        # download DraftKings CSV
-        dk_df = pd.DataFrame([
-            {f"PG{j+1}": p for j, p in enumerate(sorted(lu))}
-            for lu in st.session_state.lineups
-        ])
-        st.download_button("📥 Download DraftKings CSV",
-                           dk_df.to_csv(index=False),
-                           file_name="gto_dk_upload.csv")
+        df_lu = pd.DataFrame([{f'PG{i+1}': p for i, p in enumerate(sorted(l))} for l in st.session_state.lineups])
+        st.dataframe(df_lu, use_container_width=True)
+        st.download_button("📥 Download DraftKings CSV", df_lu.to_csv(index=False), file_name="gto_dk_upload.csv")
     else:
         st.info("Click 'Run Simulation' to generate lineups.")
 
-# 6) Ownership Report tab
+# 4) Ownership Report Tab
 with tab4:
     st.subheader("Ownership Exposure Summary")
     if st.session_state.exposure:
-        # ── SUMMARY STATS ───────────────────────────────────────────
-        pool_size = len(pool_df)  # total players in the filtered pool
-        players_used = len(st.session_state.exposure)  # unique players used
-        salary_map = raw_df.set_index("Name")["Salary"].to_dict()
-        all_salaries = [
-            sum(salary_map[player] for player in lineup)
-            for lineup in st.session_state.lineups
-        ]
-        avg_salary = sum(all_salaries) / len(all_salaries)  # average salary
-        st.markdown(f"**Players used:** {players_used} / {pool_size}")
-        st.markdown(f"**Average lineup salary:** ${avg_salary:,.0f}")
-        st.markdown("---")
-
-        exp_df = pd.DataFrame({
-            "Name": list(st.session_state.exposure.keys()),
-            "Lineup Count": list(st.session_state.exposure.values()),
-            "Exposure %": [v / total_lineups * 100 for v in st.session_state.exposure.values()]
-        }).sort_values("Exposure %", ascending=False)
-        st.dataframe(exp_df.style.format({"Exposure %": "{:.1f}%"}),
-                     use_container_width=True)
+        used = st.session_state.exposure
+        st.markdown(f"**Players used:** {len(used)} / {len(pool)}")
+        exp_df = pd.DataFrame({'Name': list(used.keys()), 'Count': list(used.values())})
+        exp_df['Exposure %'] = exp_df['Count'] / total_lineups * 100
+        st.dataframe(exp_df.sort_values('Exposure %', ascending=False), use_container_width=True)
     else:
         st.info("Click 'Run Simulation' to see exposure summary.")
