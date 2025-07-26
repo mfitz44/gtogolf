@@ -6,179 +6,168 @@ from collections import Counter
 st.set_page_config(page_title="GTO PGA Lineup Builder", layout="wide")
 st.title("🏌️‍♂️ GTO PGA DFS Lineup Builder")
 
-# Upload or load default scorecard
+# Load raw scorecard
 uploaded_file = st.sidebar.file_uploader("Upload GTO Scorecard CSV", type=["csv"])
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    raw_df = pd.read_csv(uploaded_file)
 else:
-    df = pd.read_csv("mock_gto_scorecard_updated.csv")
+    raw_df = pd.read_csv("mock_gto_scorecard_updated.csv")
     st.sidebar.info("Using default mock scorecard.")
 
-# Sidebar builder toggles
+# Sidebar builder settings
 st.sidebar.header("Builder Settings")
-# Minimum ceiling filter slider
-min_ceiling = st.sidebar.slider("Min Ceiling (yards)", min_value=0, max_value=200, value=65, step=1)
-# Other toggles
-enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", value=True)
-enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", value=True)
-enforce_cap = st.sidebar.checkbox("Enforce Exposure Cap", value=True)
-enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", value=True)
+min_ceiling = st.sidebar.slider("Min Ceiling (yards)", 0, 200, 65)
+enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", True)
+enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", True)
+enforce_cap = st.sidebar.checkbox("Enforce Exposure Cap", True)
+enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", True)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
 
-# Clean & filter player pool
-df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
-df = df[df["Ceiling"] >= min_ceiling]
-df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
+# Tabs for layout
+tab1, tab2, tab3, tab4 = st.tabs([
+    "👥 Player Pool", "⚙️ Builder Settings", "🎲 Lineups", "📈 Ownership Report"
+])
 
-# Calculate leverage metric (GTO ownership % / projected ownership %)
-df["Leverage"] = (df["GTO_Ownership%"] / df["Projected_Ownership%"]).round(1)
-
-# Reorder columns to place Leverage after Salary
-cols = df.columns.tolist()
-# Move Leverage to index after Salary
+# 1) Player Pool: live-filtered by slider
+pool_df = raw_df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
+pool_df = pool_df[pool_df["Ceiling"] >= min_ceiling]
+pool_df = pool_df[pool_df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
+pool_df["Leverage"] = (pool_df["GTO_Ownership%"] / pool_df["Projected_Ownership%"]).round(1)
+cols = list(pool_df.columns)
 if "Leverage" in cols and "Salary" in cols:
     cols.remove("Leverage")
-    salary_idx = cols.index("Salary") + 1
-    cols.insert(salary_idx, "Leverage")
-df = df[cols]
+    idx = cols.index("Salary") + 1
+    cols.insert(idx, "Leverage")
+    pool_df = pool_df[cols]
 
-# Setup
-names = df["Name"].tolist()
-weights = df["GTO_Ownership%"].values / df["GTO_Ownership%"].sum()
-player_map = {row["Name"]: row for _, row in df.iterrows()}
-salary_range = (49700, 50000)
-max_exposure = 0.265
-max_per_player = int(total_lineups * max_exposure)
+with tab1:
+    st.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
+    st.dataframe(pool_df, use_container_width=True)
 
+# 2) Builder Settings display
+with tab2:
+    st.subheader("Builder Settings")
+    st.markdown(f"""
+- **Min Ceiling:** {min_ceiling}
+- **Singleton Rule:** {'✅' if enforce_singleton else '❌'}
+- **GTO Weights:** {'✅' if enforce_weighting else '❌'}
+- **Exposure Cap:** {'✅' if enforce_cap else '❌'}
+- **Salary Range:** {'✅' if enforce_salary else '❌'}
+- **Lineups to Generate:** {total_lineups}
+""")
+
+# 3) Cachable lineup generator
 @st.cache_data(show_spinner=False)
-def build_lineups(simulate):
+def build_lineups(min_ceiling, enforce_singleton, enforce_weighting,
+                  enforce_cap, enforce_salary, total_lineups):
+    df = raw_df.copy()
+    df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
+    df = df[df["Ceiling"] >= min_ceiling]
+    df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
+    names = df["Name"].tolist()
+    player_map = df.set_index("Name").to_dict(orient="index")
+    salary_range = (49700, 50000)
+    max_exposure = total_lineups * 0.265
     exposure = Counter()
     seen = set()
     lineups = []
-    unused_players = set(names)
+    unused = set(names)
 
-    def is_valid(lineup):
-        key = tuple(sorted(lineup))
+    def is_valid(lu):
+        key = tuple(sorted(lu))
         if key in seen:
             return False
         if enforce_salary:
-            s = sum(player_map[n]["Salary"] for n in lineup)
+            s = sum(player_map[n]["Salary"] for n in lu)
             if not (salary_range[0] <= s <= salary_range[1]):
                 return False
         if enforce_cap:
-            if any(exposure[n] >= max_per_player for n in lineup):
+            if any(exposure[n] >= max_exposure for n in lu):
                 return False
         return True
 
-    def add(lineup):
-        key = tuple(sorted(lineup))
-        seen.add(key)
-        lineups.append(lineup)
-        for n in lineup:
+    def add(lu):
+        seen.add(tuple(sorted(lu)))
+        for n in lu:
             exposure[n] += 1
-            unused_players.discard(n)
+            unused.discard(n)
+        lineups.append(lu)
 
-    # Strict Singleton Enforcement
-    while unused_players:
-        name = unused_players.pop()
-        success = False
-        while not success:
-            others = [n for n in names if n != name]
-            wts = [player_map[n]["GTO_Ownership%"] for n in others]
-            total = sum(wts)
-            p = [w / total for w in wts] if enforce_weighting else None
-            chosen = list(np.random.choice(others, 5, replace=False, p=p))
-            full = chosen + [name]
-            if len(set(full)) == 6 and is_valid(full):
-                add(full)
-                success = True
+    # singleton rule
+    if enforce_singleton:
+        while unused:
+            name = unused.pop()
+            while True:
+                others = [n for n in names if n != name]
+                p = None
+                if enforce_weighting:
+                    w = [player_map[n]["GTO_Ownership%"] for n in others]
+                    total = sum(w)
+                    p = [x / total for x in w]
+                chosen = list(np.random.choice(others, 5, replace=False, p=p))
+                full = chosen + [name]
+                if is_valid(full):
+                    add(full)
+                    break
 
-    # Fill to full lineup count
+    # fill remaining lineups
     while len(lineups) < total_lineups:
-        chosen = list(np.random.choice(
-            names, 6, replace=False, p=weights if enforce_weighting else None
-        ))
+        p = None
+        if enforce_weighting:
+            w = [player_map[n]["GTO_Ownership%"] for n in names]
+            total = sum(w)
+            p = [x / total for x in w]
+        chosen = list(np.random.choice(names, 6, replace=False, p=p))
         if is_valid(chosen):
             add(chosen)
 
     return lineups, exposure
 
-# Add manual rerun button
-if "simulate" not in st.session_state:
-    st.session_state.simulate = 0
+# 4) Run Simulation button (only triggers on click)
+if "lineups" not in st.session_state:
+    st.session_state.lineups = None
+    st.session_state.exposure = None
+
 if st.sidebar.button("Run Simulation"):
-    st.session_state.simulate += 1
+    with st.spinner("⛳ Generating lineups…"):
+        lu, ex = build_lineups(
+            min_ceiling, enforce_singleton, enforce_weighting,
+            enforce_cap, enforce_salary, total_lineups
+        )
+        st.session_state.lineups = lu
+        st.session_state.exposure = ex
 
-# Run builder with a spinner
-with st.spinner("⛳ Generating lineups…"):
-    final_lineups, exposure_counter = build_lineups(st.session_state.simulate)
-
-# Format lineups
-lineup_table = []
-dk_export = []
-for idx, lineup in enumerate(final_lineups):
-    total_salary = sum(player_map[n]["Salary"] for n in lineup)
-    total_proj = sum(player_map[n]["ProjectedPoints"] for n in lineup)
-    lineup_table.append({
-        "Lineup #": idx + 1,
-        "Players": ", ".join(sorted(lineup)),
-        "Salary": total_salary,
-        "Projected Points": total_proj
-    })
-    dk_export.append({f"PG{i+1}": p for i, p in enumerate(sorted(lineup))})
-
-lineup_df = pd.DataFrame(lineup_table)
-dk_df = pd.DataFrame(dk_export)
-
-# Exposure table
-exposure_df = pd.DataFrame({
-    "Name": list(exposure_counter.keys()),
-    "Lineup Count": list(exposure_counter.values()),
-    "Exposure %": [v / total_lineups * 100 for v in exposure_counter.values()]
-}).sort_values(by="Exposure %", ascending=False)
-
-# Summary stats
-num_golfers_in_pool = len(df)
-num_golfers_used = len(set(name for lineup in final_lineups for name in lineup))
-avg_salary = lineup_df["Salary"].mean()
-min_proj = lineup_df["Projected Points"].min()
-max_proj = lineup_df["Projected Points"].max()
-
-# Build tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📥 Player Pool", "⚙️ Builder Settings", "📊 Lineups", "📈 Ownership Report"
-])
-
-with tab1:
-    st.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
-    st.dataframe(df, use_container_width=True)
-
-with tab2:
-    st.subheader("Current Build Settings")
-    st.markdown(f"""
-- Singleton Rule: {'✅ Enabled' if enforce_singleton else '❌ Off'}  
-- GTO Weighting: {'✅ Enabled' if enforce_weighting else '❌ Off'}  
-- Exposure Cap: {'✅ Enabled' if enforce_cap else '❌ Off'}  
-- Salary Range: {'✅ Enforced' if enforce_salary else '❌ Off'}  
-- Total Lineups: `{total_lineups}`
-""")
-
+# 5) Lineups tab
 with tab3:
-    st.subheader("Generated Lineups")
-    st.dataframe(lineup_df.style.format({
-        "Salary": "${:,.0f}",
-        "Projected Points": "{:.1f}"
-    }), use_container_width=True)
-    st.download_button("📥 Download DraftKings CSV", dk_df.to_csv(index=False), file_name="gto_dk_upload.csv")
+    st.subheader("Lineups")
+    if st.session_state.lineups:
+        # display lineups
+        lineup_df = pd.DataFrame([
+            {"Lineup #": i+1, **{f"PG{j+1}": p for j, p in enumerate(sorted(lu))}}
+            for i, lu in enumerate(st.session_state.lineups)
+        ])
+        st.dataframe(lineup_df, use_container_width=True)
+        # download DraftKings CSV
+        dk_df = pd.DataFrame([
+            {f"PG{j+1}": p for j, p in enumerate(sorted(lu))}
+            for lu in st.session_state.lineups
+        ])
+        st.download_button("📥 Download DraftKings CSV",
+                           dk_df.to_csv(index=False),
+                           file_name="gto_dk_upload.csv")
+    else:
+        st.info("Click 'Run Simulation' to generate lineups.")
 
+# 6) Ownership Report tab
 with tab4:
     st.subheader("Ownership Exposure Summary")
-    st.markdown(f"""
-- **Golfers in Pool:** {num_golfers_in_pool}  
-- **Golfers Used in Lineups:** {num_golfers_used}  
-- **Average Lineup Salary:** ${avg_salary:,.0f}  
-- **Projected Points Range:** {min_proj:.1f} – {max_proj:.1f}
-""")
-    st.dataframe(exposure_df.style.format({
-        "Exposure %": "{:.1f}%"
-    }), use_container_width=True)
+    if st.session_state.exposure:
+        exp_df = pd.DataFrame({
+            "Name": list(st.session_state.exposure.keys()),
+            "Lineup Count": list(st.session_state.exposure.values()),
+            "Exposure %": [v / total_lineups * 100 for v in st.session_state.exposure.values()]
+        }).sort_values("Exposure %", ascending=False)
+        st.dataframe(exp_df.style.format({"Exposure %": "{:.1f}%"}),
+                     use_container_width=True)
+    else:
+        st.info("Click 'Run Simulation' to see exposure summary.")
