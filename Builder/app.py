@@ -158,11 +158,75 @@ with tab3:
     else:
         st.info("Click 'Run Simulation' to generate lineups.")
 
+
 # 6) Ownership Report tab
 with tab4:
     st.subheader("Ownership Exposure Summary")
     if st.session_state.exposure:
+        
+        # Summary statistics
+        total_pool = len(pool_df)
+        used_players = exp_df['Name'].nunique()
+        # Average lineup salary
+        salary_map = raw_df.set_index('Name')['Salary'].to_dict()
+        lineup_salaries = [sum(salary_map[n] for n in lu) for lu in st.session_state.lineups]
+        avg_salary = sum(lineup_salaries) / len(lineup_salaries)
+        st.markdown(f"**Players used:** {used_players} of {total_pool} in pool")
+        st.markdown(f"**Average lineup salary:** ${avg_salary:,.0f}")
+# Build summary DataFrame
         exp_df = pd.DataFrame({
+            "Name": list(st.session_state.exposure.keys()),
+            "Lineup Count": list(st.session_state.exposure.values()),
+        })
+        exp_df["Exposure %"] = exp_df["Lineup Count"] / total_lineups * 100
+
+        # Merge in target and projected ownership from scorecard
+        targets = raw_df.set_index("Name")[["GTO_Ownership%", "Projected_Ownership%"]]
+        exp_df = exp_df.join(targets, on="Name")
+
+        # Calculate targets and differences
+        exp_df["Target Count"] = (exp_df["GTO_Ownership%"] / 100 * total_lineups).round(1)
+        exp_df["Diff (Count)"] = exp_df["Lineup Count"] - exp_df["Target Count"]
+        exp_df["Diff (%)"] = exp_df["Exposure %"] - exp_df["GTO_Ownership%"]
+
+        # Reorder and format
+        cols = [
+            "Name", "Target Count", "Lineup Count", "Exposure %",
+            "GTO_Ownership%", "Projected_Ownership%", "Diff (Count)", "Diff (%)"
+        ]
+        exp_df = exp_df[cols].sort_values("Exposure %", ascending=False).reset_index(drop=True)
+
+        # Format percentages
+        exp_df["Exposure %"] = exp_df["Exposure %"].map("{:.1f}%".format)
+        exp_df["GTO_Ownership%"] = exp_df["GTO_Ownership%"].map("{:.1f}%".format)
+        exp_df["Projected_Ownership%"] = exp_df["Projected_Ownership%"].map("{:.1f}%".format)
+        exp_df["Diff (%)"] = exp_df["Diff (%)"].map("{:+.1f}%".format)
+
+        st.dataframe(exp_df, use_container_width=True)
+
+        # Download button
+        st.download_button(
+            "📥 Download Ownership Summary",
+            exp_df.to_csv(index=False),
+            file_name="ownership_summary.csv"
+        )
+    else:
+        st.info("Click 'Run Simulation' to see exposure summary.")
+
+with tab4:
+    st.subheader("Ownership Exposure Summary")
+    if st.session_state.exposure:
+        
+        # Summary statistics
+        total_pool = len(pool_df)
+        used_players = exp_df['Name'].nunique()
+        # Average lineup salary
+        salary_map = raw_df.set_index('Name')['Salary'].to_dict()
+        lineup_salaries = [sum(salary_map[n] for n in lu) for lu in st.session_state.lineups]
+        avg_salary = sum(lineup_salaries) / len(lineup_salaries)
+        st.markdown(f"**Players used:** {used_players} of {total_pool} in pool")
+        st.markdown(f"**Average lineup salary:** ${avg_salary:,.0f}")
+exp_df = pd.DataFrame({
             "Name": list(st.session_state.exposure.keys()),
             "Lineup Count": list(st.session_state.exposure.values()),
             "Exposure %": [v / total_lineups * 100 for v in st.session_state.exposure.values()]
