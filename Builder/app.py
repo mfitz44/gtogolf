@@ -20,7 +20,6 @@ min_ceiling = st.sidebar.slider("Min Ceiling (yards)", 0, 200, 65)
 enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", True)
 enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", True)
 enforce_cap = st.sidebar.checkbox("Enforce Exposure Cap", True)
-max_exposure_pct = st.sidebar.slider("Max Exposure (%)", 0.0, 100.0, 26.5, step=0.1)
 enforce_salary = st.sidebar.checkbox("Enforce Salary Range (49700-50000)", True)
 total_lineups = st.sidebar.slider("Number of Lineups", 1, 150, 150)
 
@@ -42,7 +41,12 @@ if "Leverage" in cols and "Salary" in cols:
     pool_df = pool_df[cols]
 
 with tab1:
-    st.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
+            # Compute total GTO Ownership% in pool
+        total_gto = pool_df['GTO_Ownership%'].sum()
+        # Display header with sum
+        st.subheader(
+            f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%; Total GTO Ownership = {total_gto:.1f}%)"
+        )")
     st.dataframe(pool_df, use_container_width=True)
 
 # 2) Builder Settings display
@@ -59,7 +63,8 @@ with tab2:
 
 # 3) Cachable lineup generator
 @st.cache_data(show_spinner=False)
-def build_lineups(min_ceiling, enforce_singleton, enforce_weighting, enforce_cap, max_exposure_pct, enforce_salary, total_lineups):
+def build_lineups(min_ceiling, enforce_singleton, enforce_weighting,
+                  enforce_cap, enforce_salary, total_lineups):
     df = raw_df.copy()
     df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
     df = df[df["Ceiling"] >= min_ceiling]
@@ -67,7 +72,7 @@ def build_lineups(min_ceiling, enforce_singleton, enforce_weighting, enforce_cap
     names = df["Name"].tolist()
     player_map = df.set_index("Name").to_dict(orient="index")
     salary_range = (49700, 50000)
-    max_exposure = total_lineups * (max_exposure_pct / 100)
+    max_exposure = total_lineups * 0.265
     exposure = Counter()
     seen = set()
     lineups = []
@@ -130,7 +135,10 @@ if "lineups" not in st.session_state:
 
 if st.sidebar.button("Run Simulation"):
     with st.spinner("⛳ Generating lineups…"):
-        lu, ex = build_lineups(min_ceiling, enforce_singleton, enforce_weighting, enforce_cap, max_exposure_pct, enforce_salary, total_lineups)
+        lu, ex = build_lineups(
+            min_ceiling, enforce_singleton, enforce_weighting,
+            enforce_cap, enforce_salary, total_lineups
+        )
         st.session_state.lineups = lu
         st.session_state.exposure = ex
 
@@ -159,19 +167,6 @@ with tab3:
 with tab4:
     st.subheader("Ownership Exposure Summary")
     if st.session_state.exposure:
-        # ── SUMMARY STATS ───────────────────────────────────────────
-        pool_size = len(pool_df)  # total players in the filtered pool
-        players_used = len(st.session_state.exposure)  # unique players used
-        salary_map = raw_df.set_index("Name")["Salary"].to_dict()
-        all_salaries = [
-            sum(salary_map[player] for player in lineup)
-            for lineup in st.session_state.lineups
-        ]
-        avg_salary = sum(all_salaries) / len(all_salaries)  # average salary
-        st.markdown(f"**Players used:** {players_used} / {pool_size}")
-        st.markdown(f"**Average lineup salary:** ${avg_salary:,.0f}")
-        st.markdown("---")
-
         exp_df = pd.DataFrame({
             "Name": list(st.session_state.exposure.keys()),
             "Lineup Count": list(st.session_state.exposure.values()),
