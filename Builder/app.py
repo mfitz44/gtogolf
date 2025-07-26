@@ -16,8 +16,7 @@ else:
 
 # Sidebar builder settings
 st.sidebar.header("Builder Settings")
-min_ceiling = st.sidebar.slider("Min Ceiling (yards)
-min_gto_pct = st.sidebar.slider("Min GTO Ownership %", 0.0, 100.0, 0.5, step=0.1)", 0, 200, 65)
+min_ceiling = st.sidebar.slider("Min Ceiling (yards)", 0, 200, 65)
 enforce_singleton = st.sidebar.checkbox("Enforce Singleton Rule", True)
 enforce_weighting = st.sidebar.checkbox("Use GTO Ownership Weights", True)
 enforce_cap = st.sidebar.checkbox("Enforce Exposure Cap", True)
@@ -32,7 +31,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # 1) Player Pool: live-filtered by slider
 pool_df = raw_df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
 pool_df = pool_df[pool_df["Ceiling"] >= min_ceiling]
-pool_df = pool_df[pool_df["GTO_Ownership%"] >= min_gto_pct].reset_index(drop=True)
+pool_df = pool_df[pool_df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
 pool_df["Leverage"] = (pool_df["GTO_Ownership%"] / pool_df["Projected_Ownership%"]).round(1)
 cols = list(pool_df.columns)
 if "Leverage" in cols and "Salary" in cols:
@@ -64,7 +63,7 @@ def build_lineups(min_ceiling, enforce_singleton, enforce_weighting,
     df = raw_df.copy()
     df = df.dropna(subset=["Name", "Salary", "GTO_Ownership%", "Projected_Ownership%", "Ceiling"])
     df = df[df["Ceiling"] >= min_ceiling]
-    df = df[df["GTO_Ownership%"] >= min_gto_pct].reset_index(drop=True)
+    df = df[df["GTO_Ownership%"] > 0.5].reset_index(drop=True)
     names = df["Name"].tolist()
     player_map = df.set_index("Name").to_dict(orient="index")
     salary_range = (49700, 50000)
