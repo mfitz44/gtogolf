@@ -153,15 +153,47 @@ with tab3:
     else:
         st.info("Click 'Run Simulation' to generate lineups.")
 
-# Ownership Report tab
+# Ownership Report tab (upgraded)
 with tab4:
     st.subheader("Ownership Exposure Summary")
     if st.session_state.exposure:
+        # Merge exposure summary with player pool data
         exp_df = pd.DataFrame({
             'Name': list(st.session_state.exposure.keys()),
             'Lineup Count': list(st.session_state.exposure.values())
         })
         exp_df['Exposure %'] = exp_df['Lineup Count'] / total_lineups * 100
+
+        # Merge with player pool for GTO and Projected Ownership
+        merge_cols = ['Name', 'GTO_Ownership%', 'Projected_Ownership%']
+        exp_df = exp_df.merge(df_pool[merge_cols], on='Name', how='left')
+
+        # Calculate differences
+        exp_df['Diff vs GTO'] = (exp_df['Exposure %'] - exp_df['GTO_Ownership%']).round(2)
+        exp_df['Diff vs Proj'] = (exp_df['Exposure %'] - exp_df['Projected_Ownership%']).round(2)
+
+        # Reorder columns for clarity
+        exp_df = exp_df[['Name', 'Lineup Count', 'Exposure %', 'GTO_Ownership%', 'Projected_Ownership%', 'Diff vs GTO', 'Diff vs Proj']]
+
+        # --- Brief summary at top ---
+        # Did every eligible golfer appear at least once?
+        singleton_used = exp_df['Lineup Count'].min() > 0
+        singleton_status = "✅ YES" if singleton_used else "❌ NO"
+        # Average total salary
+        if st.session_state.lineups:
+            avg_salary = 0
+            for lineup in st.session_state.lineups:
+                avg_salary += sum(df_pool.set_index('Name').loc[player]['Salary'] for player in lineup)
+            avg_salary = avg_salary / len(st.session_state.lineups)
+        else:
+            avg_salary = 0
+
+        st.markdown(f"""
+        **Summary:**  
+        - Singleton Rule Used? **{singleton_status}**  
+        - Average Lineup Salary: **${avg_salary:,.2f}**
+        """)
         st.dataframe(exp_df.sort_values('Exposure %', ascending=False), use_container_width=True)
+        st.download_button("📥 Download Ownership Summary", exp_df.to_csv(index=False), file_name="ownership_summary.csv")
     else:
         st.info("Click 'Run Simulation' to see exposure summary.")
