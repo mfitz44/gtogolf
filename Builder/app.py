@@ -35,10 +35,8 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "👥 Player Pool", "⚙️ Builder Settings", "🎲 Lineups", "📈 Ownership Report"
 ])
 
-# Prepare player pool
-df_pool = df_raw.dropna(subset=["Name","Salary","GTO_Ownership%","Projected_Ownership%","Ceiling"])
-df_pool = df_pool[df_pool["Ceiling"] >= min_ceiling]
-df_pool = df_pool[df_pool["GTO_Ownership%"] > 0.5].reset_index(drop=True)
+# Prepare player pool (NO FILTERING by ceiling or GTO%)
+df_pool = df_raw.dropna(subset=["Name","Salary","GTO_Ownership%","Projected_Ownership%","Ceiling"]).reset_index(drop=True)
 df_pool["Leverage"] = (df_pool["GTO_Ownership%"] / df_pool["Projected_Ownership%"]).round(1)
 cols = list(df_pool.columns)
 if "Leverage" in cols and "Salary" in cols:
@@ -47,7 +45,7 @@ if "Leverage" in cols and "Salary" in cols:
     cols.insert(idx, "Leverage")
     df_pool = df_pool[cols]
 with tab1:
-    st.subheader(f"Player Pool (Ceiling ≥ {min_ceiling}, GTO > 0.5%)")
+    st.subheader("Player Pool (no filter)")
     st.dataframe(df_pool, use_container_width=True)
 
 # Display settings
